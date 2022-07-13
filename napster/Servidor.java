@@ -1,19 +1,19 @@
 package napster;
 
-import java.io.BufferedReader;
-import java.io.DataOutputStream;
 import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
-import java.net.ServerSocket;
-import java.net.Socket;
+import java.util.ArrayList;
+import java.util.List;
 
 public class Servidor {
+	static DatagramSocket serverSocket;
+	static protected List<String> peerFiles;
 	public static void main(String args[]) throws Exception{
-		DatagramSocket serverSocket = new DatagramSocket(10098);
+		peerFiles = new ArrayList<>();
+		serverSocket = new DatagramSocket(10098, InetAddress.getByName("127.0.0.1"));
+		System.out.println("Server iniciado em " + serverSocket.getLocalAddress() + ":" + serverSocket.getLocalPort());
 
 		while(true) {
 			byte[] recBuffer = new byte[1024];
@@ -21,8 +21,7 @@ public class Servidor {
 			DatagramPacket recPkt = new DatagramPacket(recBuffer, recBuffer.length);
 
 			serverSocket.receive(recPkt); //BLOCKING
-			
-			//Socket newConnection = serverSocket.accept(); //BLOCKING
+			System.out.println("PACOTE RECEBIDO de " + recPkt.getAddress() + ":" + recPkt.getPort());
 
 			S2PThread thread = new S2PThread(recPkt);
 			thread.start();
@@ -58,45 +57,89 @@ class S2PThread extends Thread{
 
 			node.close(); */
 			Mensagem msg = Peer.BytestoMsg(pkt.getData());
+			System.out.println("Mensagem " + msg.reqtype  + "recebida de: " + pkt.getSocketAddress());
 
 			switch (msg.reqtype) {
 				case "JOIN":
-					joinOk(msg.fileNames, pkt.getAddress(), pkt.getPort());
+					joinOk(msg, pkt.getAddress(), pkt.getPort());
+					break;
 				case "LEAVE":
 					leaveOk(pkt.getAddress(), pkt.getPort());
+					break;
 				case "SEARCH":
 					search(msg.fileNames[0], pkt.getAddress(), pkt.getPort());
+					break;
 				case "UPDATE":
 					update(msg.fileNames[0], pkt.getAddress(), pkt.getPort());
+					break;
 			}
 		} catch(Exception e) {
 			
 		}
 	}
 
-	private static void joinOk(String filesNames[], InetAddress ipAddress, int port) throws IOException {
+	private void joinOk(Mensagem msg, InetAddress ipAddress, int port) throws IOException {
+		//Armazena os arquivos como nomedopeer,arquivo
+		for (int i = 0; i < msg.fileNames.length; i++) {
+			Servidor.peerFiles.add(ipAddress.getHostAddress() + ":" + port + "," + msg.fileNames[i]);
+		}
 
-		/*ARMAZENAR OS DADOS */
-
-		Mensagem msg = new Mensagem("JOIN_OK");
-		Peer.sendMsg(msg, ipAddress, port);
+		//Crio a mensagem de join ok
+		Mensagem answer = new Mensagem("JOIN_OK", msg.fileNames);
+		//Uso o metodo do peer que envia mensagens
+		Peer.sendMsg(Servidor.serverSocket, answer, ipAddress, port);
+		System.out.println("Peer " + ipAddress.getHostAddress() + ":" + port + " adicionado com arquivos " + Peer.stringArrayConcat(msg.fileNames));
+		System.out.print("Arquivos do servidor: [");
+		for (int i = 0 ; i < Servidor.peerFiles.size(); i++) {
+			System.out.print(Servidor.peerFiles.get(i) + " | ");
+		}
+		System.out.println("]");
 	}
 
-	private static void leaveOk(InetAddress ipAddress, int port) throws IOException {
-
-		/* EXCLUIR OS DADOS */
-
-		Mensagem msg = new Mensagem("LEAVE_OK");
-		Peer.sendMsg(msg, ipAddress, port);
+	private void leaveOk(InetAddress ipAddress, int port) throws IOException {
+		//Excluo os dados do peer
+		for(int i = 0; i < Servidor.peerFiles.size(); i++) {
+			if (Servidor.peerFiles.get(i).contains(pkt.getSocketAddress() + "")) {
+				Servidor.peerFiles.remove(i);
+			}
+		}
+		
+		//Crio a mensagem de resposta
+		Mensagem answer = new Mensagem("LEAVE_OK", null);
+		//Uso o método do peer que envia mensagens
+		Peer.sendMsg(Servidor.serverSocket, answer, ipAddress, port);
+		System.out.println("Peer " + ipAddress + ":" + port + " excluido dos arquivos ");
+		System.out.print("Arquivos do servidor: [");
+		for (int i = 0 ; i < Servidor.peerFiles.size(); i++) {
+			System.out.print(Servidor.peerFiles.get(i) + " | ");
+		}
+		System.out.println("]");
 	}
 
-	private static void search(String fileName, InetAddress ipAddress, int port) throws IOException {
+	private void search(String fileName, InetAddress ipAddress, int port) throws IOException {
+		List<String> peersL = new ArrayList<String>();
 
-		/*PROCURA O ARQUIVO */
+		for (int i = 0; i < Servidor.peerFiles.size(); i++) {
+			if (Servidor.peerFiles.get(i).contains(fileName)) {
+				//Adiciono o IP, que está antes do ':'
+				peersL.add(Servidor.peerFiles.get(i).split(",")[0]);
+			}
+		}
 
-		String peers[] = null;
+		String peers[];
+		if (peersL.size() > 0) {
+			peers = new String[peersL.size()];
+			for (int i = 0; i < peersL.size(); i++) {
+				peers[i] = peersL.get(i);
+			}
+		}
+		else {
+			peers = null;
+		}
+		System.out.println("Peers encontrados: [" + Peer.stringArrayConcat(peers) + "]");
+
 		Mensagem msg = new Mensagem("SEARCH", peers);
-		Peer.sendMsg(msg, ipAddress, port);
+		Peer.sendMsg(Servidor.serverSocket, msg, ipAddress, port);
 	}
 
 	private static void update(String fileName, InetAddress ipAddress, int port) throws IOException {
@@ -104,6 +147,6 @@ class S2PThread extends Thread{
 		/*ATUALIZA OS DADOS */
 
 		Mensagem msg = new Mensagem("UPDATE_OK");
-		Peer.sendMsg(msg, ipAddress, port);
+		Peer.sendMsg(Servidor.serverSocket, msg, ipAddress, port);
 	}
 }

@@ -13,31 +13,40 @@ import java.io.OutputStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
-import java.net.ServerSocket;
 import java.net.Socket;
 
 public class Peer {
 	static DatagramSocket udpSocket;
 	private static InetAddress serverAddress;
 	private static int serverPort;
+	protected static TimeoutTimer joinTimer;
+	protected static TimeoutTimer leaveTimer;
+	protected static TimeoutTimer updateTimer;
+	protected static TimeoutTimer searchTimer;
 	public static void main(String args[]) throws Exception{
 		//buffer que le info do teclado
-		BufferedReader inFromUser = new BufferedReader(
-									new InputStreamReader(System.in));
+		BufferedReader inFromUser = new BufferedReader(new InputStreamReader(System.in));
 
 		//abro o socket
 		udpSocket = new DatagramSocket();
+		System.out.println("Peer " + udpSocket.getLocalAddress() + ":" + udpSocket.getLocalPort() + " iniciado");
 
+		System.out.println("Digite a operação desejada: JOIN, LEAVE, SEARCH, DOWNLOAD");
 		String userChoice = inFromUser.readLine();
-		while (userChoice.compareTo("LEAVE") != 0) {
+		while (true) {
 			switch(userChoice) {
 				case "JOIN":
-					//Inicializa o peer com as informações necessárias do teclado
-					serverAddress = InetAddress.getByName(inFromUser.readLine());
-					serverPort = Integer.valueOf(inFromUser.readLine());
+					//Captura as informações necessárias do teclado
+					System.out.println("Digite o ip do server");
+					//serverAddress = InetAddress.getByName(inFromUser.readLine());
+					serverAddress = InetAddress.getByName("localhost");
+					System.out.println("Digite a porta do server");
+					//serverPort = Integer.valueOf(inFromUser.readLine());
+					serverPort = 10098;
+					System.out.println("Digite o caminho da sua pasta");
 					File storageFolder = new File(inFromUser.readLine());
 
-					//Inicializo a thread do peer que recebe requisições
+					//Inicializa a thread do peer que recebe e trata requisições
 					PeerThread pt = new PeerThread();
 					pt.start();
 
@@ -49,81 +58,85 @@ public class Peer {
 					//Crio a lista com os nomes dos arquivos na pasta especificada para armazenamento
 					String[] fileNames;
 					if (storageFolder.isDirectory()) {
-						File[] filePaths = storageFolder.listFiles();
-						fileNames = new String[filePaths.length];
+						File[] folderFiles = storageFolder.listFiles();
+						fileNames = new String[folderFiles.length];
 
-						for (int i = 0; i < filePaths.length; i++) {
-							fileNames[i] = filePaths[i].getName();
+						for (int i = 0; i < folderFiles.length; i++) {
+							fileNames[i] = folderFiles[i].getName();
 						}
 					} else {
 						fileNames = null;
+						//System.out.println(("Deve ser digitado um diretório!"));
 					}
 
 					join(fileNames);
+					break;
 				case "SEARCH":
 					String fileName = inFromUser.readLine();
 					search(fileName);
+					break;
 				case "DOWNLOAD":
 					InetAddress peerAddress = InetAddress.getByName(inFromUser.readLine());
 					int peerPort = Integer.valueOf(inFromUser.readLine());
 					String file2download = inFromUser.readLine();
 					
 					download(peerAddress, peerPort, file2download);
+					break;
 				case "LEAVE":
 					leave();
+					break;
 			}
+			System.out.println("Digite a operação desejada: JOIN, LEAVE, SEARCH, DOWNLOAD");
+			userChoice = inFromUser.readLine();
 		}
 	}
 
-	private static void join(String fileNames[]) throws IOException, ClassNotFoundException {
-		Mensagem msg;
-		do {
-			msg = new Mensagem("JOIN", fileNames);
-			sendMsg(msg, serverAddress, serverPort);
+	protected static void join(String fileNames[]) throws IOException, ClassNotFoundException {
+		Mensagem msg = new Mensagem("JOIN", fileNames);
+		sendMsg(udpSocket, msg, serverAddress, serverPort);
 
-			byte[] recBuffer = new byte[1024];
-			DatagramPacket recPkt = new DatagramPacket(recBuffer, recBuffer.length);
-			udpSocket.receive(recPkt); //BLOCKING
-
-			msg = BytestoMsg(recPkt.getData());
-		} while (msg.reqtype.compareTo("JOIN_OK") != 0);
+		if (joinTimer != null) {
+			joinTimer.interrupt();
+		}
+		joinTimer = new TimeoutTimer("join", fileNames);
+		joinTimer.start();
 	}
 
-	private static void leave() throws IOException, ClassNotFoundException {
-		Mensagem msg;
-		do {
-			msg = new Mensagem("LEAVE");
-			sendMsg(msg, serverAddress, serverPort);
+	protected static void leave() throws IOException, ClassNotFoundException {
+		Mensagem msg = new Mensagem("LEAVE");
+		sendMsg(udpSocket, msg, serverAddress, serverPort);
 
-			byte[] recBuffer = new byte[1024];
-			DatagramPacket recPkt = new DatagramPacket(recBuffer, recBuffer.length);
-			udpSocket.receive(recPkt); //BLOCKING
-
-			msg = BytestoMsg(recPkt.getData());
-		} while (msg.reqtype.compareTo("LEAVE_OK") != 0);
+		if (leaveTimer != null) {
+			leaveTimer.interrupt();
+		}
+		leaveTimer = new TimeoutTimer("leave", null);
+		leaveTimer.start();
 	}
 
-	private static void update(String newFile) throws IOException, ClassNotFoundException {
-		Mensagem msg;
-		do {
-			String[] fileList = new String[1];
-			fileList[0] = newFile;
-			msg = new Mensagem("UPDATE", fileList);
-			sendMsg(msg, serverAddress, serverPort);
+	protected static void update(String newFile) throws IOException, ClassNotFoundException {
+		String[] fileList = new String[1];
+		fileList[0] = newFile;
+		Mensagem msg = new Mensagem("UPDATE", fileList);
+		sendMsg(udpSocket, msg, serverAddress, serverPort);
 
-		byte[] recBuffer = new byte[1024];
-			DatagramPacket recPkt = new DatagramPacket(recBuffer, recBuffer.length);
-			udpSocket.receive(recPkt); //BLOCKING
-
-			msg = BytestoMsg(recPkt.getData());
-		} while (msg.reqtype.compareTo("LEAVE_OK") != 0);
+		if (updateTimer != null) {
+			updateTimer.interrupt();
+		}
+		updateTimer = new TimeoutTimer("update", fileList);
+		updateTimer.start();
 	}
 
-	private static void search(String fileName) throws IOException {
+	protected static void search(String fileName) throws IOException {
 		String[] fileList = new String[1];
 		fileList[0] = fileName;
 		Mensagem msg = new Mensagem("SEARCH", fileList);
-		sendMsg(msg, serverAddress, serverPort);
+		sendMsg(udpSocket, msg, serverAddress, serverPort);
+
+		if (searchTimer!= null) {
+			searchTimer.interrupt();
+		}
+		searchTimer = new TimeoutTimer("search", fileList);
+		searchTimer.start();
 	}
 
 	private static void download(InetAddress peerAddress, int peerPort, String fileName) throws IOException, ClassNotFoundException {
@@ -156,7 +169,7 @@ public class Peer {
 		downloadSocket.close();
 	}
 
-	static void sendMsg(Mensagem msg, InetAddress ipAddress, int port) throws IOException {
+	static void sendMsg(DatagramSocket udpSocket, Mensagem msg, InetAddress ipAddress, int port) throws IOException {
 		byte[] sendData = new byte[1024];
 		sendData = MsgtoBytes(msg);
 
@@ -180,6 +193,19 @@ public class Peer {
 		ois.close();
 		return msg;
 	}
+
+	static String stringArrayConcat(String[] fileNames) {
+		if (fileNames == null) {
+			return "";
+		}
+		String concat = "";
+		for (int i = 0; i < fileNames.length; i++) {
+			concat += fileNames[i] + " ";
+		}
+		//remove o ultimo espaço
+		concat = concat.substring(0, concat.length() - 2);
+		return concat;
+	}
 }
 
 class PeerThread extends Thread {
@@ -187,7 +213,6 @@ class PeerThread extends Thread {
 	public void run() {
 		try {
 			DatagramSocket masterSocket = Peer.udpSocket;
-			//ServerSocket masterSocket = new ServerSocket(port);
 
 			while(true) {
 				byte[] recBuffer = new byte[1024];
@@ -196,7 +221,6 @@ class PeerThread extends Thread {
 
 				masterSocket.receive(recPkt); //BLOCKING
 				
-				//Socket answerSocket = masterSocket.accept();
 				PeerAnswerThread pat = new PeerAnswerThread(recPkt);
 				pat.start();
 			}
@@ -214,6 +238,69 @@ class PeerAnswerThread extends Thread {
 	}
 
 	public void run() {
+		try {
+			Mensagem msg = Peer.BytestoMsg(pkt.getData());
+			System.out.println("Mensagem " + msg.reqtype + " recebida de: " + pkt.getSocketAddress());
 
+			switch(msg.reqtype) {
+				case "JOIN_OK":
+					Peer.joinTimer.stop = true;
+					System.out.println("Sou peer " + Peer.udpSocket.getLocalAddress().getHostAddress() + ":" + Peer.udpSocket.getLocalPort() + " com arquivos " + Peer.stringArrayConcat(msg.fileNames));
+					break;
+				case "LEAVE_OK":
+					Peer.leaveTimer.stop = true;
+					break;
+				case "UPDATE_OK":
+					Peer.updateTimer.stop = true;
+					break;
+				case "SEARCH":
+					Peer.searchTimer.stop = true;
+					System.out.println("peers com arquivo solicitado: [" + Peer.stringArrayConcat(msg.fileNames) + "]");
+					break;
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+
+		
+	}
+}
+
+class TimeoutTimer extends Thread {
+	private String invoke;
+	private String[] fileData;
+	protected boolean stop;
+
+	public TimeoutTimer(String method, String fileData[]) {
+		invoke = method;
+		this.fileData = fileData;
+		stop = false;
+	}
+
+	public void run() {
+		try {
+			TimeoutTimer.sleep(4000);
+			if (stop) {
+				this.interrupt();
+				return;
+			}
+
+			switch(invoke) {
+				case "join":
+					Peer.join(fileData);
+					break;
+				case "leave":
+					Peer.leave();
+					break;
+				case "update":
+					Peer.update(fileData[0]);
+					break;
+				case "search":
+					Peer.search(fileData[0]);
+					break;
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
 	}
 }
