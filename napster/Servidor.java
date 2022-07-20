@@ -39,23 +39,6 @@ class S2PThread extends Thread{
 
 	public void run() {
 		try {
-			/*
-			//cria canal de leitura de informações do socket
-			InputStreamReader is = new InputStreamReader(node.getInputStream());
-			BufferedReader reader = new BufferedReader(is);
-
-			//cria canal de escrita de dados no socket
-			OutputStream os = node.getOutputStream();
-			DataOutputStream writer = new DataOutputStream(os);
-
-			//leitura do socket
-			String texto = reader.readLine(); //BLOCKING
-			System.out.println("Peer " + node.getInetAddress().getHostAddress() + " disse: " + texto);
-
-			//escrita no socket
-			writer.writeBytes("concordo");
-
-			node.close(); */
 			Mensagem msg = Peer.BytestoMsg(pkt.getData());
 			System.out.println("Mensagem " + msg.reqtype  + "recebida de: " + pkt.getSocketAddress());
 
