@@ -41,20 +41,30 @@ public class Peer {
 	protected static TimeoutTimer searchTimer;
 	/** Pasta na maquina onde estao localizados os arquivos do peer e onde serao baixados os arquivos */
 	protected static File storageFolder;
+	/** booleano que controla se o peer se juntou a rede ou nao */
+	protected static boolean joined = false;
 	
 	public static void main(String args[]) throws Exception{
 		//buffer que le info do teclado
 		BufferedReader inFromUser = new BufferedReader(new InputStreamReader(System.in));
 
-		//abro o socket no ip e porta escolhido pelo usuario
-		String peerIp = inFromUser.readLine();
-		int udpPort = Integer.valueOf(inFromUser.readLine());
-		udpSocket = new DatagramSocket(new InetSocketAddress(peerIp, udpPort));
+		//abro o socket no ip e porta escolhido pelo usuario.
+		//Enquanto houver algum problema para abrir o socket o
+		//usuario deve digitar informacoes dnv
+		boolean ipPortOk = false;
+		while (!ipPortOk) {
+			try {
+				String peerIp = inFromUser.readLine();
+				int udpPort = Integer.valueOf(inFromUser.readLine());
+				udpSocket = new DatagramSocket(new InetSocketAddress(peerIp, udpPort));
+				ipPortOk = true;
+			} catch (Exception e) {
+	
+			}
+		}
 
 		System.out.println("Digite o caminho da pasta dos arquivos");
 		storageFolder = new File(inFromUser.readLine());
-		
-		System.out.println("Peer " + udpSocket.getLocalAddress() + ":" + udpSocket.getLocalPort() + " iniciado");
 
 		//Thread para ouvir requisições udp
 		PeerListenerThread plt = new PeerListenerThread();
@@ -67,51 +77,56 @@ public class Peer {
 		System.out.println("Digite a operação desejada: JOIN, LEAVE, SEARCH, DOWNLOAD");
 		String userChoice = inFromUser.readLine();
 		while (true) {
-			switch(userChoice) {
+			switch(userChoice.toUpperCase()) {
 				case "JOIN":
-					//Para o projeto o endereço do servido e sempre 127.0.0.1
-					serverAddress = InetAddress.getByName("localhost");
-					//Porta do servidor e sempre 10098
-					serverPort = 10098;
+					if (!joined) {
+						//Para o projeto o endereço do servido e sempre 127.0.0.1
+						serverAddress = InetAddress.getByName("localhost");
+						//Porta do servidor e sempre 10098
+						serverPort = 10098;
 
-					//Inicializa a thread do peer que trata requisições recebidas
-					plt = new PeerListenerThread();
-					plt.start();
+						//Inicializa a thread do peer que trata requisições recebidas
+						plt = new PeerListenerThread();
+						plt.start();
 
-					//Crio a pasta para armazenamento se não existir
-					if (!storageFolder.exists()) {
-						storageFolder.mkdir();
-					}
-
-					//Crio a lista com os nomes dos arquivos na pasta especificada para armazenamento. A lista sera enviada para o servidor
-					String[] fileNames;
-					if (storageFolder.isDirectory()) {
-						File[] folderFiles = storageFolder.listFiles();
-						fileNames = new String[folderFiles.length + 1];
-
-						//Primeiro campo da lista da mensagem deve ser a porta tcp do peer
-						fileNames[0] = tcpSocket.getLocalPort() + "";
-
-						for (int i = 1; i < fileNames.length; i++) {
-							fileNames[i] = folderFiles[i - 1].getName();
+						//Crio a pasta para armazenamento se não existir
+						if (!storageFolder.exists()) {
+							storageFolder.mkdir();
 						}
-					} else {
-						//primeiro campo envia o port do socket tcp sempre
-						fileNames = new String[1];
-						fileNames[0] = tcpSocket.getLocalPort() + "";
-					}
 
-					join(fileNames);
+						//Crio a lista com os nomes dos arquivos na pasta especificada
+						//para armazenamento. A lista sera enviada para o servidor
+						String[] fileNames;
+						if (storageFolder.isDirectory()) {
+							File[] folderFiles = storageFolder.listFiles();
+							fileNames = new String[folderFiles.length + 1];
+
+							//Primeiro campo da lista da mensagem deve ser a porta tcp do peer
+							fileNames[0] = tcpSocket.getLocalPort() + "";
+
+							for (int i = 1; i < fileNames.length; i++) {
+								fileNames[i] = folderFiles[i - 1].getName();
+							}
+						} else {
+							//primeiro campo envia o port do socket tcp sempre
+							fileNames = new String[1];
+							fileNames[0] = tcpSocket.getLocalPort() + "";
+						}
+
+						join(fileNames);
+					}
 					break;
 				case "SEARCH":
 					System.out.println("Qual o nome do arquivo desejado?");
 					String fileName = inFromUser.readLine();
-					search(fileName);
+					if (joined) {
+						search(fileName);
+					}
 					break;
 				case "DOWNLOAD":
 					System.out.println("Digite o IP do peer que possui o arquivo");
 					InetAddress peerAddress = InetAddress.getByName(inFromUser.readLine());
-					System.out.println("Digite o a porta do peer que possui o arquivo");
+					System.out.println("Digite o a porta tcp do peer que possui o arquivo");
 					int peerPort = Integer.valueOf(inFromUser.readLine());
 					System.out.println("Digite o nome do arquivo desejado");
 					String file2download = inFromUser.readLine();
@@ -121,10 +136,13 @@ public class Peer {
 					dt.start();
 					break;
 				case "LEAVE":
-					leave();
-					//interrompo a thread que trata requisicoes caso o peer deixe a rede
-					if (!plt.isInterrupted()) {
-						plt.interrupt();
+					if (joined) {
+						leave();
+
+						//interrompo a thread que trata requisicoes caso o peer deixe a rede
+						if (!plt.isInterrupted()) {
+							plt.interrupt();
+						}
 					}
 					break;
 			}
@@ -146,7 +164,7 @@ public class Peer {
 
 		//Uso uma classe de timer para reenviar a requisicao caso o servidor nao responda
 		if (joinTimer != null) {
-			joinTimer.interrupt();
+			joinTimer.stop = true;
 		}
 		joinTimer = new TimeoutTimer("join", fileNames);
 		joinTimer.start();
@@ -164,7 +182,7 @@ public class Peer {
 
 		//Uso uma classe de timer para reenviar a requisicao caso o servidor nao responda
 		if (leaveTimer != null) {
-			leaveTimer.interrupt();
+			leaveTimer.stop = true;
 		}
 		leaveTimer = new TimeoutTimer("leave", null);
 		leaveTimer.start();
@@ -186,7 +204,7 @@ public class Peer {
 
 		//Uso uma classe de timer para reenviar a requisicao caso o servidor nao responda
 		if (updateTimer != null) {
-			updateTimer.interrupt();
+			updateTimer.stop = true;
 		}
 		updateTimer = new TimeoutTimer("update", fileList);
 		updateTimer.start();
@@ -207,7 +225,7 @@ public class Peer {
 
 		//Uso uma classe de timer para reenviar a requisicao caso o servidor nao responda
 		if (searchTimer!= null) {
-			searchTimer.interrupt();
+			searchTimer.stop = true;
 		}
 		searchTimer = new TimeoutTimer("search", fileList);
 		searchTimer.start();
@@ -274,7 +292,7 @@ public class Peer {
 			//Como foi possivel baixar o arquivo, mando requisição de atualizacao para o servidor
 			update(fileName);
 		} else {
-			System.out.println("peer " + peerAddress.getHostAddress() + ":" + peerPort + "negou o download" /*TODO: pedindo agora para... [ip]:[porta] */);
+			System.out.println("peer " + peerAddress.getHostAddress() + ":" + peerPort + " negou o download" /*TODO: pedindo agora para... [ip]:[porta] */);
 		}
 
 		downloadSocket.close();
@@ -392,14 +410,17 @@ class PeerAnswerThread extends Thread {
 			//Converte os dados do pacote de volta para uma Mensagem
 			Mensagem msg = Peer.BytestoMsg(pkt.getData());
 
-			//Cada vez que um ok chega é necessário parar o respectivo timer que estará contando na classe Peer para que não de o timeout e a mensagem não seja enviada outra vez
+			//Cada vez que um ok chega é necessário parar o respectivo timer que estará contando na
+			//classe Peer para que não de o timeout e a mensagem não seja enviada outra vez
 			switch(msg.reqtype) {
 				case "JOIN_OK":
 					Peer.joinTimer.stop = true;
-					System.out.println("Sou peer " + Peer.udpSocket.getLocalAddress().getHostAddress() + ":" + Peer.udpSocket.getLocalPort() + ":" + Peer.tcpSocket.getLocalPort() + " com arquivos " + Peer.stringArrayConcat(msg.fileNames));
+					Peer.joined = true;
+					System.out.println("Sou peer " + Peer.udpSocket.getLocalAddress().getHostAddress() + ":" + Peer.udpSocket.getLocalPort() + " com arquivos " + Peer.stringArrayConcat(msg.fileNames));
 					break;
 				case "LEAVE_OK":
 					Peer.leaveTimer.stop = true;
+					Peer.joined = false;
 					break;
 				case "UPDATE_OK":
 					Peer.updateTimer.stop = true;
@@ -409,7 +430,6 @@ class PeerAnswerThread extends Thread {
 					//Na resposta search, o campo fileNames da mensagem condera um array com os
 					//peers que possuem o arquivo
 					System.out.println("peers com arquivo solicitado: [" + Peer.stringArrayConcat(msg.fileNames) + "]");
-					//TODO: remover os [] talvez?
 					break;
 				case "ALIVE":
 					//e necessario enviar de volta ao servidor um aliveOk
@@ -477,7 +497,7 @@ class FileSenderThread extends Thread {
 
 				//Nego o download se o arquivo não existir
 				//ou aleatoriamente nego o download requisitado
-				Random rd = new Random();
+				//Random rd = new Random();
 				if (!fileToSend.exists() /*TODO: || rd.nextInt(100) < 50*/) {
 					//Envio o download negado por TCP
 					Mensagem answer = new Mensagem("DOWNLOAD_NEGADO");

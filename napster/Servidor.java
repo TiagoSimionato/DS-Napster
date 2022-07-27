@@ -1,13 +1,14 @@
 package napster;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.List;
 
-//TODO: search deve devolver ip:udpPorta:tcpPorta ou ip:tcpPorta?
 //TODO: IMPLEMENTAR CONCORRENCIA
 
 /**
@@ -23,10 +24,10 @@ public class Servidor {
 
 	/** Inicializa as threads necessárias e fica em loop esperando requisições */
 	public static void main(String args[]) throws Exception{
-		//TODO: ler o ip a ser digitado na inicialização
+		//buffer que le info do teclado
+		BufferedReader inFromUser = new BufferedReader(new InputStreamReader(System.in));
 		//Inicializo o socket do server
-		serverSocket = new DatagramSocket(10098, InetAddress.getByName("127.0.0.1"));
-		System.out.println("Server iniciado em " + serverSocket.getLocalAddress() + ":" + serverSocket.getLocalPort());
+		serverSocket = new DatagramSocket(10098, InetAddress.getByName(inFromUser.readLine()));
 
 		//Inicializo a thread que verifica se os peers estão vivos
 		AliveSender as = new AliveSender();
@@ -78,7 +79,6 @@ class ServerAnswerThread extends Thread{
 		try {
 			//Uso a função auxiliar na classe Peer para converter os dados do pacote para a classe de mensagem
 			Mensagem msg = Peer.BytestoMsg(pkt.getData());
-			//TODO: REMOVE: System.out.println("Mensagem " + msg.reqtype  + " recebida de: " + pkt.getSocketAddress());
 
 			//Encaminho a requisição para função adequada dependendo do tipo de requisição
 			switch (msg.reqtype) {
@@ -117,6 +117,7 @@ class ServerAnswerThread extends Thread{
 		String tcpDownloadPort = msg.fileNames[0];
 
 		//Primeiro verifico se o peer ja esta presente na rede
+		boolean add = true;
 		for (int i = 0; i < Servidor.peerFiles.size(); i++) {
 			//E necessario comparar o ip:udpPorta dos dados armazenados com os parametros recebidos
 			String[] slices = Servidor.peerFiles.get(i).split(":");
@@ -124,8 +125,8 @@ class ServerAnswerThread extends Thread{
 
 			String newPeer = ipAddress.getHostAddress() + port;
 			if (iPeer.compareTo(newPeer) == 0) {
-				System.out.println("Peer já adicionado na rede!");
-				return;
+				add = false;
+				break;
 			}
 		}
 
@@ -138,24 +139,22 @@ class ServerAnswerThread extends Thread{
 		}
 		//Armazena os arquivos como ip:udpPorta:tcpPorta,arquivo.extencao
 		for (int i = 1; i < msg.fileNames.length; i++) {
-			Servidor.peerFiles.add(ipAddress.getHostAddress() + ":" + port + ":" + tcpDownloadPort + "," + msg.fileNames[i]);
+			//apenas adiciono os arquivos se o peer não esta na rede
+			if (add) {
+				Servidor.peerFiles.add(ipAddress.getHostAddress() + ":" + port + ":" + tcpDownloadPort + "," + msg.fileNames[i]);
+			}
+			
 			files[i - 1] = msg.fileNames[i];
 		}
 
+		if (add) {
+			System.out.println("Peer " + ipAddress.getHostAddress() + ":" + port + " adicionado com arquivos " + Peer.stringArrayConcat(files));
+		}
 
 		//Crio a mensagem de join_ok com os arquivos que foram associados ao peer
 		Mensagem answer = new Mensagem("JOIN_OK", files);
 		//Uso o metodo do peer que envia mensagens
 		Peer.sendMsg(Servidor.serverSocket, answer, ipAddress, port);
-
-		System.out.println("Peer " + ipAddress.getHostAddress() + ":" + port + ":" + tcpDownloadPort + " adicionado com arquivos " + Peer.stringArrayConcat(files));
-
-		//TODO: REMOVE PRINT
-		System.out.print("\nArquivos do servidor: [");
-		for (int i = 0 ; i < Servidor.peerFiles.size(); i++) {
-			System.out.print(Servidor.peerFiles.get(i) + " | ");
-		}
-		System.out.println("]\n");
 	}
 
 	/**
@@ -168,42 +167,41 @@ class ServerAnswerThread extends Thread{
 		for(int i = 0; i < Servidor.peerFiles.size(); i++) {
 			//Substring é usado para tirar a / inicial
 			if (Servidor.peerFiles.get(i).contains( (pkt.getSocketAddress() + "").substring(1) )) {
-				Servidor.peerFiles.remove(i);
 				//indice corrigido para não pular elementos
-				i--;
+				Servidor.peerFiles.remove(i--);
 			}
 		}
 		
 		//Crio a mensagem de resposta e uso o método auxiliar no Peer  para enviar
 		Mensagem answer = new Mensagem("LEAVE_OK");
 		Peer.sendMsg(Servidor.serverSocket, answer, ipAddress, port);
-
-		//TODO: REMoVE PRINT
-		System.out.print("\nArquivos do servidor: [");
-		for (int i = 0 ; i < Servidor.peerFiles.size(); i++) {
-			System.out.print(Servidor.peerFiles.get(i) + " | ");
-		}
-		System.out.println("]\n");
 	}
 
 	/**
-	 * Função que recebe o ip:udoPorta do peer que enviou a requisição 
+	 * Função que recebe o ip:udpPorta do peer que enviou a requisição 
 	 * e o nome de um arquivo que deve ser procurado na lista do servidor
 	 * @param fileName    Nome do arquivo que será procurado
 	 * @param ipAddress   Ip do Peer que recebera a resposta
 	 * @param port        Porta udp do peer que recebera a resposta
 	 */
 	private void search(String fileName, InetAddress ipAddress, int port) throws IOException {
-		System.out.println(("Peer " + ipAddress + ":" + port + " soliticou o arquivo " + fileName));
+		System.out.println(("Peer " + ipAddress.getHostAddress()+ ":" + port + " soliticou o arquivo " + fileName));
 
 		//Lista que contera os peers que possuem o arquivo desejado
 		ArrayList<String> peersL = new ArrayList<String>();
 
 		//Itero sobre a lista do servidor e adiciono os peers que estão associados ao arquivo
 		for (int i = 0; i < Servidor.peerFiles.size(); i++) {
-			if (Servidor.peerFiles.get(i).contains(fileName)) {
-				//Adiciono as informacaoes do peer, que estao antes da ','
-				peersL.add(Servidor.peerFiles.get(i).split(",")[0]);
+			//pego o nome do arquivo das informacoes do servidor, que esta depois da ','
+			String peerFile = Servidor.peerFiles.get(i).split(",")[1];
+
+			if (peerFile.compareTo(fileName) == 0) {
+				//Adiciono as informacoes relevantes do peer, ou seja, o ip e a porta tcp para o download
+
+				//split = [ip; udpPort; tcpPort,arq.ext]
+				String[] split = Servidor.peerFiles.get(i).split(":");
+				String ipTcpPort = split[0] + ":" + split[2].split(",")[0];
+				peersL.add(ipTcpPort);
 			}
 		}
 
@@ -303,15 +301,18 @@ class AliveSender extends Thread {
 				//Se o peeri não esta vivo
 				if (!Servidor.alivePeers.contains(peerI)) {
 
+					String removedFiles = "";
 					//Itero sobre peerFiles para remover os arquivos do peer morto
 					for (int j = 0; j < Servidor.peerFiles.size(); j++) {
 						if (Servidor.peerFiles.get(j).contains(peerI)) {
-							Servidor.peerFiles.remove(j);
 							//Correcao no indice para nao pular registros
-							j--;
+							String fullRegister = Servidor.peerFiles.remove(j--);
+
+							//nome do arquivo vem depois da virgula
+							removedFiles += fullRegister.split(",")[1] + " ";
 						}
 					}
-					System.out.println("Peer " + networKPeers.get(i) + " morto. Eliminando seus arquivos"); //TODO: LISTAR OS ARQUIVOS
+					System.out.println("Peer " + networKPeers.get(i) + " morto. Eliminando seus arquivos " + removedFiles);
 				}
 			}
 
